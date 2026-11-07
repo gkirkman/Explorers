@@ -1,9 +1,12 @@
 #include <heltec_unofficial.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h> 
 
 #define FREQUENCY 915.0 // Match your receiver's frequency exactly
 
 // --- TEST MODE CONFIGURATION ---
-#define TEST_MODE true  // Keep 'true' while testing without a physical sensor attached!
+#define TEST_MODE true  // Change to 'false' once you wire up your physical BMP280!
 // -------------------------------
 
 // --- HELTEC HARDWARE POWER/RESET PINS ---
@@ -11,9 +14,23 @@
 #define OLED_RST  21  // Physical reset pin for the SSD1306 screen
 // ----------------------------------------
 
+Adafruit_BMP280 bmp; // I2C sensor object
 float txPressure = 0.0;
 unsigned long lastTxTrigger = 0;
 float mockBasePressure = 1013.25; 
+
+// Cleaned up function to pull sensor data
+float readPressure() {
+  float p = bmp.readPressure(); // Reads pressure in Pascals
+  
+  if (!isnan(p)) {
+    p = p / 100.0F; // Convert Pascals to hPa
+  } else {
+    Serial.println("Error: Could not read pressure data. Defaulting to 0.0");
+    p = 0.0;
+  }
+  return p;
+}
 
 void setup() {
   // 1. Force screen hardware power rails BEFORE running the library setup
@@ -41,16 +58,12 @@ void setup() {
   display.flipScreenVertically();
   display.clear();
   
-  // Draw an obvious structural boundary to test pixel generation
   display.drawRect(0, 0, 128, 64);
-  
   display.setFont(ArialMT_Plain_10);
   display.drawString(10, 12, "OLED TX HARDWARE TEST");
   display.setFont(ArialMT_Plain_16);
   display.drawString(10, 28, "SCREEN IS OK!");
-  
   display.display();
-  Serial.println("[OLED TEST] Test frame pushed. Delaying for 5 seconds.");
   delay(5000); 
   // ============================================================
 
@@ -64,7 +77,24 @@ void setup() {
   }
   radio.setFrequency(FREQUENCY);
   
-  Serial.println("TX Radio Ready...");
+  // --- BMP280 INITIALIZATION (ONLY IN LIVE MODE) ---
+  if (!TEST_MODE) {
+    Serial.println("Initializing BMP280 Sensor...");
+    // 0x77 is the default Adafruit I2C address. If it fails, try 0x76 for generic sensors
+    if (!bmp.begin(0x77)) { 
+      Serial.println("Could not find a valid BMP280 sensor, check wiring!");
+      display.clear();
+      display.setFont(ArialMT_Plain_10);
+      display.drawString(0, 0, "SENSOR ERROR!");
+      display.drawString(0, 16, "BMP280 not found.");
+      display.drawString(0, 32, "Check I2C Wiring!");
+      display.display();
+      while (true); // Freeze here so you don't transmit garbage data
+    }
+    Serial.println("BMP280 Sensor Detected Successfully.");
+  }
+
+  Serial.println("TX Setup Complete. Radio Ready...");
 }
 
 void loop() {
@@ -81,8 +111,8 @@ void loop() {
       txPressure = mockBasePressure + noise;
       Serial.print("[TEST MODE] ");
     } else {
-      // --- LIVE MODE PLACEHOLDER ---
-      // txPressure = readYourPhysicalSensor(); 
+      // Live Mode reading from your Adafruit helper function
+      txPressure = readPressure(); 
     }
 
     // --- STEP 2: BROADCAST OVER LORA ---
@@ -114,7 +144,7 @@ void updateDisplay(float pressure, bool txSuccess) {
     display.drawString(0, 0, "--- LORA TRANSMITTER ---");
   }
   
-  // Main Telemetry Display
+  // Main Telemetry Display 
   display.setFont(ArialMT_Plain_16);
   char buf[32]; 
   snprintf(buf, sizeof(buf), "%.2f hPa", pressure);
